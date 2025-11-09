@@ -1,0 +1,109 @@
+import socket
+import threading
+import json
+from flask import Flask, render_template_string, request
+
+# ==== CONFIGURACIÓN ====
+UDP_IP = "0.0.0.0"
+UDP_PORT = 8266
+ESP32_IP = None  # se detecta automáticamente al recibir un mensaje
+data_received = {"temp": 0, "hum": 0, "luz": 0}
+
+# ==== INTERFAZ HTML ====
+html_template = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Control y Monitoreo ESP32</title>
+    <style>
+        body { font-family: Arial; text-align: center; background: #f3f3f3; }
+        h1 { color: #333; }
+        .card { background: white; border-radius: 12px; padding: 20px; margin: 10px; display: inline-block; width: 200px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        button { padding: 10px 20px; margin: 5px; border: none; border-radius: 6px; background: #007BFF; color: white; cursor: pointer; }
+        button.off { background: #dc3545; }
+    </style>
+    <meta http-equiv="refresh" content="1">
+</head>
+<body>
+    <h1>Panel de Control ESP32</h1>
+
+    <div>
+        <div class="card"><h3>Temperatura</h3><div>{{ temp }} °C</div></div>
+        <div class="card"><h3>Humedad</h3><div>{{ hum }} %</div></div>
+        <div class="card"><h3>Luminosidad</h3><div>{{ luz }}</div></div>
+    </div>
+
+    <h2>Actuadores</h2>
+    <div>
+        <div class="card">
+            <h3>LED</h3>
+            <button onclick="enviar('LED_ON')">Encender</button>
+            <button class="off" onclick="enviar('LED_OFF')">Apagar</button>
+        </div>
+        <div class="card">
+            <h3>Buzzer</h3>
+            <button onclick="enviar('BUZZER_ON')">Encender</button>
+            <button class="off" onclick="enviar('BUZZER_OFF')">Apagar</button>
+        </div>
+        <div class="card">
+            <h3>Motor DC</h3>
+            <button onclick="enviar('MOTOR_ON')">Encender</button>
+            <button class="off" onclick="enviar('MOTOR_OFF')">Apagar</button>
+        </div>
+        <div class="card">
+            <h3>Servo</h3>
+            <input type="range" min="0" max="180" value="0" oninput="servo(this.value)">
+        </div>
+    </div>
+
+<script>
+function enviar(cmd) {
+    fetch('/cmd?msg=' + cmd);
+}
+function servo(val) {
+    fetch('/cmd?msg=SERVO_' + val);
+}
+</script>
+
+</body>
+</html>
+"""
+
+app = Flask(__name__)
+
+@app.route('/')
+def index():
+    return render_template_string(html_template, **data_received)
+
+@app.route('/cmd')
+def cmd():
+    global ESP32_IP
+    msg = request.args.get('msg', '')
+    if ESP32_IP:
+        sock.sendto(msg.encode(), (ESP32_IP, UDP_PORT))
+        print("Comando enviado a ESP32:", msg)
+    return ('', 204)
+
+# ==== SERVIDOR UDP ====
+def udp_server():
+    global ESP32_IP
+    sock.bind((UDP_IP, UDP_PORT))
+    print(f"[UDP] Escuchando en puerto {UDP_PORT}...")
+    while True:
+        data, addr = sock.recvfrom(1024)
+        ESP32_IP = addr[0]
+        try:
+            msg = json.loads(data.decode())
+            data_received.update(msg)
+            print(f"Datos desde {ESP32_IP}: {data_received}")
+        except:
+            print("Error formato:", data)
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+threading.Thread(target=udp_server, daemon=True).start()
+
+# ==== SERVIDOR WEB ====
+if __name__ == '__main__':
+    print("[WEB] Servidor iniciado en http://0.0.0.0:5000")
+    app.run(host="0.0.0.0", port=5000)
