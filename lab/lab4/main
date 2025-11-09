@@ -1,0 +1,83 @@
+import network
+import socket
+import time
+import json
+from machine import Pin, ADC, PWM
+import dht
+
+# ======= CONFIGURACIÓN DE RED =======
+UDP_IP = "192.168.0.21"   # <-- IP del PC con Flask
+UDP_PORT = 8266
+WIFI_SSID = "FamiliaGarzon_2.4GHz"
+WIFI_PASS = "Tichiba25."
+
+# ======= CONECTAR WIFI =======
+def connect_wifi():
+    wlan = network.WLAN(network.STA_IF)
+    wlan.active(True)
+    if not wlan.isconnected():
+        print("Conectando a WiFi...")
+        wlan.connect(WIFI_SSID, WIFI_PASS)
+        while not wlan.isconnected():
+            time.sleep(0.5)
+    print("Conectado a WiFi:", wlan.ifconfig())
+    return wlan
+
+connect_wifi()
+
+# ======= CONFIGURAR SENSORES =======
+sensor_dht = dht.DHT11(Pin(4))
+ldr = ADC(Pin(34))
+ldr.atten(ADC.ATTN_11DB)
+
+# ======= CONFIGURAR ACTUADORES =======
+led = Pin(13, Pin.OUT)
+buzzer = Pin(12, Pin.OUT)
+motor = Pin(14, Pin.OUT)
+servo = PWM(Pin(27), freq=50)
+servo_angle = 0
+
+def set_servo(angle):
+    duty = int(40 + (angle / 180) * 115)  # mapeo 0-180° a 0.5-2.5 ms
+    servo.duty(duty)
+
+# ======= CONFIGURAR UDP =======
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.bind(('', UDP_PORT))  # también recibirá comandos
+
+print("Esperando comandos UDP en puerto", UDP_PORT)
+
+# ======= BUCLE PRINCIPAL =======
+last_send = time.ticks_ms()
+
+while True:
+    # --- enviar datos de sensores cada 250 ms ---
+    if time.ticks_diff(time.ticks_ms(), last_send) > 250:
+        try:
+            sensor_dht.measure()
+            temp = sensor_dht.temperature()
+            hum = sensor_dht.humidity()
+            luz = ldr.read()
+            mensaje = '{{"temp": {:.1f}, "hum": {:.1f}, "luz": {}}}'.format(temp, hum, luz)
+            sock.sendto(mensaje.encode(), (UDP_IP, UDP_PORT))
+            last_send = time.ticks_ms()
+        except Exception as e:
+            print("Error sensor:", e)
+
+    # --- recibir comandos ---
+    sock.settimeout(0.1)
+    try:
+        data, addr = sock.recvfrom(1024)
+        msg = data.decode().strip()
+        print("Comando recibido:", msg)
+        if msg == "LED_ON": led.value(1)
+        elif msg == "LED_OFF": led.value(0)
+        elif msg == "BUZZER_ON": buzzer.value(1)
+        elif msg == "BUZZER_OFF": buzzer.value(0)
+        elif msg == "MOTOR_ON": motor.value(1)
+        elif msg == "MOTOR_OFF": motor.value(0)
+        elif msg.startswith("SERVO_"):
+            angle = int(msg.split("_")[1])
+            set_servo(angle)
+    except Exception:
+        pass
